@@ -7,6 +7,7 @@ Mọi chỉ số (loss, accuracy, macro-F1) dùng cùng định nghĩa với scr
 """
 from __future__ import annotations
 
+import random
 import time
 
 import numpy as np
@@ -34,7 +35,11 @@ DEFAULT_CFG = dict(
 
 def set_seed(seed: int) -> None:
     """Đặt seed cho random, numpy, torch (và torch.cuda nếu có)."""
-    raise NotImplementedError  # TODO
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def macro_f1_from_confusion(cm: np.ndarray) -> float:
