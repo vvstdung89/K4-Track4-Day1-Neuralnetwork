@@ -6,11 +6,16 @@ Mọi chỉ số (loss, accuracy, macro-F1) dùng cùng định nghĩa với scr
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import random
+import subprocess
+import sys
 import time
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 
@@ -273,16 +278,37 @@ def write_predictions(row_id, preds, path: str) -> None:
     preds  : nhãn dự đoán int64 0..6 (cùng thứ tự với row_id)
     Phải đủ mọi dòng của tập eval, mỗi row_id đúng một lần.
     """
-    raise NotImplementedError  # TODO
+    row_id, preds = np.asarray(row_id, dtype=np.int64), np.asarray(preds, dtype=np.int64)
+    assert row_id.shape == preds.shape, "row_id và preds phải cùng độ dài"
+    assert len(np.unique(row_id)) == len(row_id), "mỗi row_id đúng một lần"
+    assert preds.min() >= 0 and preds.max() <= N_CLASSES - 1, "pred phải nằm trong 0..6"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    pd.DataFrame({"row_id": row_id, "pred": preds}).to_csv(path, index=False)
 
 
-def final_eval(cfg: dict, result: dict, data: dict, pred_path: str) -> None:
+def final_eval(cfg: dict, result: dict, data: dict, pred_path: str, eval_json: str | None = None,
+               repo_root: str = "..") -> dict | None:
     """Dùng MỘT LẦN cho cấu hình cuối cùng (và baseline): nạp best_state, dự đoán eval, ghi predictions.
 
-    Các bước:
-      1. model = MLP(...); model.load_state_dict(result["best_state"]); lên device
-      2. preds = predict(model, data["X_eval"])  # fp32, eval mode
-      3. write_predictions(data["eval_row_id"], preds.cpu().numpy(), pred_path)
-      4. chạy `python scripts/evaluate.py --pred <pred_path>` và ghi kết quả vào bảng/báo cáo
+    1. model = MLP(...) nạp result["best_state"] (epoch có val_loss thấp nhất); 2. dự đoán toàn bộ X_eval (fp32, eval mode);
+    3. ghi pred_path; 4. nếu có eval_json: chạy `python scripts/evaluate.py --pred <pred_path> --out <eval_json>` từ
+    repo_root (đường dẫn truyền vào được đổi sang tuyệt đối), in kết quả và trả về nội dung eval_json.
     """
-    raise NotImplementedError  # TODO
+    cfg = {**DEFAULT_CFG, **cfg}
+    assert result.get("best_state") is not None, "result không có best_state (chạy lại run_experiment, không nạp từ JSON)"
+    model = MLP(tuple(cfg["hidden"]), cfg["dropout"], cfg["init"]).to(data["X_eval"].device)
+    model.load_state_dict(result["best_state"])
+    preds = predict(model, data["X_eval"])
+    write_predictions(data["eval_row_id"], preds.cpu().numpy(), pred_path)
+    if eval_json is None:
+        return None
+
+    cmd = [sys.executable, "scripts/evaluate.py", "--pred", os.path.abspath(pred_path),
+           "--out", os.path.abspath(eval_json)]
+    r = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    print(r.stdout)
+    if r.returncode != 0:
+        raise RuntimeError(f"evaluate.py lỗi:\n{r.stderr}")
+    with open(eval_json, encoding="utf-8") as f:
+        return json.load(f)
